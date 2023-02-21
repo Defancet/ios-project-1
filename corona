@@ -1,0 +1,737 @@
+#!/bin/bash
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=en_US.UTF-8
+
+print_help() {
+    echo "A record analyzer of people with proven coronavirus infection causing COVID-19 disease"
+    echo ""
+    echo "Usage: corona [-h] [FILTERS] [COMMAND] [LOG...]"
+    echo ""
+    echo "Commands:"
+    echo "  infected      counts the number of infected"
+    echo "  merge         combine several files with records into one, maintaining the original order"
+    echo "  gender        returns the number of infected for each genders"
+    echo "  age           returns statistics of infected people by age"
+    echo "  daily         returns statistics of infected people for each day"
+    echo "  monthly       returns statistics on infected people for each month"
+    echo "  yearly        returns statistics on infected people for each year"
+    echo "  countries     returns statistics of infected people for individual"
+    echo "                countries (excluding the Czech Republic)"
+    echo "  districts     returns statistics on infected people for each district"
+    echo "  regions       returns statistics of infected people for each region"
+    echo ""
+    echo "Filters:"
+    echo "  -a DATETIME   only records after the date are considered (including the date)"
+    echo "                DATETIME must be in the format YYYY-MM-DD"
+    echo "  -b DATETIME   only records before the date are considered (including the date)"
+    echo "                DATETIME must be in the format YYYY-MM-DD"
+    echo "  -g GENDER     only records of infected people of a given gender are considered"
+    echo "                GENDER must be M (men) or Z (women)"
+    echo "  -s [WIDTH]    for commands: gender, age, daily, monthly, yearly, countries, districts, regions"
+    echo "                displays statistics graphically in the form of histograms"
+    echo "  -h            prints help with a brief description of each command and filter"
+    echo ""
+    exit 0
+}
+
+COMMAND=""
+AFTER_DATE_TIME="0000-00-00"
+BEFORE_DATE_TIME="9999-99-99"
+GENDER=""
+WIDTH=""
+FILE=""
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    infected)
+        COMMAND="$1"
+        shift
+        ;;
+    merge)
+        COMMAND="$1"
+        shift
+        ;;
+    gender)
+        COMMAND="$1"
+        shift
+        ;;
+    age)
+        COMMAND="$1"
+        shift
+        ;;
+    daily)
+        COMMAND="$1"
+        shift
+        ;;
+    monthly)
+        COMMAND="$1"
+        shift
+        ;;
+    yearly)
+        COMMAND="$1"
+        shift
+        ;;
+    countries)
+        COMMAND="$1"
+        shift
+        ;;
+    districts)
+        COMMAND="$1"
+        shift
+        ;;
+    regions)
+        COMMAND="$1"
+        shift
+        ;;
+    -a)
+        if [[ "$2" =~ ^[0-9]{4}-(((0[13578]|(10|12))-(0[1-9]|[1-2][0-9]|3[0-1]))|(02-(0[1-9]|[1-2][0-9]))|((0[469]|11)-(0[1-9]|[1-2][0-9]|30)))$ ]]; then
+            AFTER_DATE_TIME="$2"
+        else
+            echo "DATETIME must be in the format YYYY-MM-DD"
+            exit 2
+        fi
+        shift
+        shift
+        ;;
+    -b)
+        if [[ "$2" =~ ^[0-9]{4}-(((0[13578]|(10|12))-(0[1-9]|[1-2][0-9]|3[0-1]))|(02-(0[1-9]|[1-2][0-9]))|((0[469]|11)-(0[1-9]|[1-2][0-9]|30)))$ ]]; then
+            BEFORE_DATE_TIME="$2"
+        else
+            echo "DATETIME must be in the format YYYY-MM-DD"
+            exit 2
+        fi
+        shift
+        shift
+        ;;
+    -g)
+        if [[ "$2" == "Z" ]]; then
+            GENDER="$2"
+        elif [[ "$2" == "M" ]]; then
+            GENDER="$2"
+        else
+            echo "GENDER must be M (men) or Z (women)"
+            exit 2
+        fi
+        shift
+        shift
+        ;;
+    -s)
+        if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            WIDTH="0"
+            shift
+        else
+            WIDTH="$2"
+            shift
+        fi
+        ;;
+    -h)
+        print_help
+        shift
+        ;;
+    *)
+        if [[ "$1" == *.gz ]]; then
+            FILE="$(gzip -c -k -d $1)
+            $FILE"
+            shift
+        elif [[ "$1" == *.bz2 ]]; then
+            FILE="$(bzip2 -c -k -d $1)
+            $FILE"
+            shift
+        else
+            FILE="$(cat $1)
+            $FILE"
+            shift
+        fi
+        ;;
+    esac
+done
+
+if [[ -z $FILE ]]; then
+  FILE="$(awk -F, '{ print $1, $2, $3, $4, $5, $6, $7, $8, $9, $0 }')"
+fi
+
+FILTERED=$(echo "$FILE" | awk -F, \
+    -v AFTER_DATE_TIME="$AFTER_DATE_TIME" \
+    -v BEFORE_DATE_TIME="$BEFORE_DATE_TIME" \
+    '{ NR>1
+    if (AFTER_DATE_TIME != "" && AFTER_DATE_TIME > $2)
+    {
+        next
+    }
+    if (BEFORE_DATE_TIME != "" && BEFORE_DATE_TIME < $2)
+    {
+        next
+    }
+    {print}
+		}')
+
+if [[ $COMMAND == "" ]]; then
+    echo "id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs $FILTERED"
+    exit 0
+fi
+
+if [[ $COMMAND == "infected" ]]; then
+    echo "$FILTERED" | awk 'END {print NR}'
+    exit 0
+fi
+
+if [[ $COMMAND == "merge" ]]; then
+    echo "id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs
+    $FILTERED"
+    exit 0
+fi
+
+if [[ $COMMAND == "gender" ]]; then
+    echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" -v GENDER="$GENDER" \
+    '{
+        GENDER_MAX = 1
+        if (WIDTH == 0)
+        {
+            WIDTH = 100000
+        }
+        if($4 == "M")
+        {
+            M_COUNT+= 1
+        }
+        else if($4 == "Z")
+        {
+            Z_COUNT+= 1
+        }
+        else
+        {
+            next
+        }
+        if(M_COUNT == Z_COUNT)
+        {
+            GENDER_MAX=M_COUNT
+        }
+        if(M_COUNT < Z_COUNT)
+        {
+            GENDER_MAX=Z_COUNT
+        }
+        else
+        {
+            GENDER_MAX=M_COUNT
+        }
+        }
+        END{
+        if (GENDER == "")
+        {
+            if (WIDTH == "")
+            {
+                printf("M: %d\nZ: %d\n", M_COUNT, Z_COUNT)
+            }
+            else
+            {
+                printf("M: ")
+                HASH=sprintf("%"((M_COUNT*WIDTH)/GENDER_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+                printf("Z: ")
+                HASH=sprintf("%"((Z_COUNT*WIDTH)/GENDER_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            }
+        }
+        if (GENDER == "M")
+        {
+            if (WIDTH == "")
+            {
+                printf("M: %d\n", M_COUNT)
+            }
+            else
+            {
+                printf("M: ")
+                HASH=sprintf("%"((M_COUNT*WIDTH)/GENDER_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            }
+        }
+        if (GENDER == "Z")
+        {
+            if (WIDTH == "")
+            {
+                printf("Z: %d\n", Z_COUNT)
+            }
+            else
+            {
+                printf("Z: ")
+                HASH=sprintf("%"((Z_COUNT*WIDTH)/GENDER_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            }
+        }
+    }'
+    exit 0
+fi
+
+if [[ $COMMAND == "age" ]]; then
+    echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" \
+    '{
+        if (WIDTH == 0)
+        {
+            WIDTH = 10000
+        }
+        if ($3 >= 0 && $3 <= 5)
+        {
+            AGE_0_5 += 1
+            AGE_MAX = AGE_0_5
+        }
+        else if ($3 >= 6 && $3 <= 15)
+        {
+            AGE_6_15 += 1
+            if(AGE_6_15 > AGE_0_5)
+            {
+                AGE_MAX = AGE_6_15
+            }
+        }
+        else if ($3 >= 16 && $3 <= 25)
+        {
+            AGE_16_25 += 1
+            if(AGE_16_25 > AGE_6_15)
+            {
+                AGE_MAX = AGE_16_25
+            }
+        }
+        else if ($3 >= 26 && $3 <= 35)
+        {
+            AGE_26_35 += 1
+            if(AGE_26_35 > AGE_16_25)
+            {
+                AGE_MAX = AGE_26_35
+            }
+        }
+        else if ($3 >= 36 && $3 <= 45)
+        {
+            AGE_36_45 += 1
+            if(AGE_36_45 > AGE_26_35)
+            {
+                AGE_MAX = AGE_36_45
+            }
+        }
+        else if ($3 >= 46 && $3 <= 55)
+        {
+            AGE_46_55 += 1
+            if(AGE_46_55 > AGE_36_45)
+            {
+                AGE_MAX = AGE_46_55
+            }
+        }
+        else if ($3 >= 56 && $3 <= 65)
+        {
+            AGE_56_65 += 1
+            if(AGE_56_65 > AGE_46_55)
+            {
+                AGE_MAX = AGE_56_65
+            }
+        }
+        else if ($3 >= 66 && $3 <= 75)
+        {
+            AGE_66_75 += 1
+            if(AGE_66_75 > AGE_56_65)
+            {
+                AGE_MAX = AGE_66_75
+            }
+        }
+        else if ($3 >= 76 && $3 <= 85)
+        {
+            AGE_76_85 += 1
+            if(AGE_76_85 > AGE_66_75)
+            {
+                AGE_MAX = AGE_76_85
+            }
+        }
+        else if ($3 >= 86 && $3 <= 95)
+        {
+            AGE_86_95 += 1
+            if(AGE_86_95 > AGE_76_85)
+            {
+                AGE_MAX = AGE_86_95
+            }
+        }
+        else if ($3 >= 96 && $3 <= 105)
+        {
+            AGE_96_105 += 1
+            if(AGE_96_105 > AGE_86_95)
+            {
+                AGE_MAX = AGE_96_105
+            }
+        }
+        else if ($3 >= 105)
+        {
+            AGE_105 += 1
+            if(AGE_105 > AGE_96_105)
+            {
+                AGE_MAX = AGE_105
+            }
+        }
+        else
+        {
+            NONE += 1
+            if(NONE > AGE_105)
+            {
+                AGE_MAX = NONE
+            }
+        }
+        }
+        {
+
+        }
+        END {
+        if (WIDTH == "")
+        {
+            printf("0-5   : %d\n",AGE_0_5)
+            printf("6-15  : %d\n",AGE_6_15)
+            printf("16-25 : %d\n",AGE_16_25)
+            printf("26-35 : %d\n",AGE_26_35)
+            printf("36-45 : %d\n",AGE_36_45)
+            printf("46-55 : %d\n",AGE_46_55)
+            printf("56-65 : %d\n",AGE_56_65)
+            printf("66-75 : %d\n",AGE_66_75)
+            printf("76-85 : %d\n",AGE_76_85)
+            printf("86-95 : %d\n",AGE_86_95)
+            printf("96-105: %d\n",AGE_96_105)
+            printf(">105  : %d\n",AGE_105)
+            if (NONE > 0)
+            {
+            printf("None  : %d\n",NONE)
+            }
+        }
+        else
+        {
+            printf("0-5   : ")
+            HASH=sprintf("%"((AGE_0_5*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("6-15  : ")
+            HASH=sprintf("%"((AGE_6_15*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("16-25 : ")
+            HASH=sprintf("%"((AGE_16_25*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("26-35 : ")
+            HASH=sprintf("%"((AGE_26_35*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("36-45 : ")
+            HASH=sprintf("%"((AGE_36_45*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("46-55 : ")
+            HASH=sprintf("%"((AGE_46_55*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("56-65 : ")
+            HASH=sprintf("%"((AGE_56_65*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("66-75 : ")
+            HASH=sprintf("%"((AGE_66_75*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("76-85 : ")
+            HASH=sprintf("%"((AGE_76_85*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("86-95 : ")
+            HASH=sprintf("%"((AGE_86_95*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf("96-105: ")
+            HASH=sprintf("%"((AGE_96_105*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            printf(">105  : ")
+            HASH=sprintf("%"((AGE_105*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            if (NONE > 0)
+            {
+            printf("None  : ")
+            HASH=sprintf("%"((NONE*WIDTH)/AGE_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            }
+        }
+    }'
+    exit 0
+fi
+
+if [[ $COMMAND == "daily" ]]; then
+    if [[ $WIDTH == "" ]]; then
+        echo "$FILTERED" | awk -F, \
+        '{A[$2]+=1}
+        END{
+        for (DAY_COUNT in A)
+        {
+            print(DAY_COUNT": "A[DAY_COUNT])
+        }
+        }' | sort
+        exit 0
+    else
+        echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" \
+        '{A[$2]+=1}
+        DAY_MAX = 0
+        {
+        if (WIDTH == 0)
+        {
+            WIDTH = 500
+        }
+        }
+        END{
+        for (DAY_COUNT in A)
+        {
+            if (A[DAY_COUNT] > DAY_MAX)
+            {
+                DAY_MAX  = A[DAY_COUNT]
+            }
+        }
+        for(DAY_COUNT in A)
+        {
+
+            printf("%s: ", DAY_COUNT)
+            HASH=sprintf("%"((A[DAY_COUNT]*WIDTH)/DAY_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+        }
+        }' | sort
+        exit 0
+		fi
+fi
+
+if [[ $COMMAND == "monthly" ]]; then
+    if [[ $WIDTH == "" ]]; then
+        echo "$FILTERED" | awk -F, \
+        '{A[substr($2,1,7)]+=1}
+        END{
+        for (MONTH_COUNT in A)
+        {
+            print(MONTH_COUNT": "A[MONTH_COUNT])
+        }
+        }' | sort
+        exit 0
+    else
+        echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" \
+        '{A[substr($2,1,7)]+=1}
+        MONTH_MAX = 0
+        {
+        if (WIDTH == 0)
+        {
+            WIDTH = 10000
+        }
+        }
+        END{
+        for (MONTH_COUNT in A)
+        {
+            if (A[MONTH_COUNT] > MONTH_MAX)
+            {
+                MONTH_MAX  = A[MONTH_COUNT]
+            }
+        }
+        for(MONTH_COUNT in A)
+        {
+
+            printf("%s: ", MONTH_COUNT)
+            HASH=sprintf("%"((A[MONTH_COUNT]*WIDTH)/MONTH_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+        }
+        }' | sort
+        exit 0
+		fi
+fi
+
+if [[ $COMMAND == "yearly" ]]; then
+    if [[ $WIDTH == "" ]]; then
+        echo "$FILTERED" | awk -F, \
+        '{A[substr($2,1,4)]+=1}
+        END{
+        for (YEAR_COUNT in A)
+        {
+            print(YEAR_COUNT": "A[YEAR_COUNT])
+        }
+        }' | sort
+        exit 0
+    else
+        echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" \
+        '{A[substr($2,1,4)]+=1}
+        YEAR_MAX = 0
+        {
+        if (WIDTH == 0)
+        {
+            WIDTH = 10000
+        }
+        }
+        END{
+        for (YEAR_COUNT in A)
+        {
+            if (A[YEAR_COUNT] > YEAR_MAX)
+            {
+                YEAR_MAX  = A[YEAR_COUNT]
+            }
+        }
+        for(YEAR_COUNT in A)
+        {
+
+            printf("%s: ", YEAR_COUNT)
+            HASH=sprintf("%"((A[YEAR_COUNT]*WIDTH)/YEAR_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+        }
+        }' | sort
+        exit 0
+		fi
+fi
+
+if [[ $COMMAND == "countries" ]]; then
+    if [[ $WIDTH == "" ]]; then
+        echo "$FILTERED" | awk -F, \
+        '{A[$8]+=1}
+        END{
+        for (COUNTRY_COUNT in A)
+        {
+            if (COUNTRY_COUNT == "")
+            {
+                continue
+            }
+            else if (COUNTRY_COUNT == "CZ")
+            {
+                 continue
+            }
+            else
+            {
+                print(COUNTRY_COUNT": "A[COUNTRY_COUNT])
+            }
+        }
+        }' | sort
+        exit 0
+    else
+        echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" \
+        '{A[$8]+=1}
+        COUNTRY_MAX = 0
+        {
+        if (WIDTH == 0)
+        {
+            WIDTH = 100
+        }
+        }
+        END{
+        for (COUNTRY_COUNT in A)
+        {
+            if (COUNTRY_COUNT != "" && COUNTRY_COUNT != "CZ")
+            {
+                if (A[COUNTRY_COUNT] > COUNTRY_MAX)
+                {
+                    COUNTRY_MAX = A[COUNTRY_COUNT]
+                }
+            }
+        }
+        for(COUNTRY_COUNT in A)
+        {
+            if (COUNTRY_COUNT == "")
+            {
+                continue
+            }
+            else if (COUNTRY_COUNT == "CZ")
+            {
+                 continue
+            }
+            else
+            {
+                printf("%s: ", COUNTRY_COUNT)
+                HASH=sprintf("%"((A[COUNTRY_COUNT]*WIDTH)/COUNTRY_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            }
+        }
+        }' | sort
+        exit 0
+		fi
+fi
+
+if [[ $COMMAND == "districts" ]]; then
+    if [[ $WIDTH == "" ]]; then
+        echo "$FILTERED" | awk -F, \
+        '{A[$6]+=1}
+        END{
+        for (DISTRICT_COUNT in A)
+        {
+            if (DISTRICT_COUNT == "")
+            {
+                NONE_COUNT+=A[DISTRICT_COUNT]
+            }
+            else
+            {
+                print(DISTRICT_COUNT": "A[DISTRICT_COUNT])
+            }
+        }
+        if (NONE_COUNT > 0)
+        {
+            printf("None  : %d\n", NONE_COUNT)
+        }
+        }' | sort
+        exit 0
+    else
+        echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" \
+        '{A[$6]+=1}
+        DISTRICT_MAX = 0
+        {
+        if (WIDTH == 0)
+        {
+            WIDTH = 1000
+        }
+        }
+        END{
+        for (DISTRICT_COUNT in A)
+        {
+            if (A[DISTRICT_COUNT] > DISTRICT_MAX)
+            {
+                DISTRICT_MAX = A[DISTRICT_COUNT]
+            }
+        }
+        for(DISTRICT_COUNT in A)
+        {
+            if (DISTRICT_COUNT == "")
+            {
+                NONE_COUNT+=A[DISTRICT_COUNT]
+            }
+            else
+            {
+                printf("%s: ", DISTRICT_COUNT)
+                HASH=sprintf("%"((A[DISTRICT_COUNT]*WIDTH)/DISTRICT_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            }
+        }
+        if (NONE_COUNT > 0)
+        {
+            printf("None  : ")
+            HASH=sprintf("%"((NONE_COUNT*WIDTH)/DISTRICT_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+        }
+        }' | sort
+        exit 0
+		fi
+fi
+
+if [[ $COMMAND == "regions" ]]; then
+    if [[ $WIDTH == "" ]]; then
+        echo "$FILTERED" | awk -F, \
+        '{A[$5]+=1}
+        NONE_COUNT = 0
+        END{
+        for (REGION_COUNT in A)
+        {
+            if (REGION_COUNT == "")
+            {
+                NONE_COUNT+=A[REGION_COUNT]
+            }
+            else
+            {
+                print(REGION_COUNT": "A[REGION_COUNT])
+            }
+        }
+        if (NONE_COUNT > 0)
+        {
+            printf("None : %d\n", NONE_COUNT)
+        }
+        }' | sort
+        exit 0
+    else
+        echo "$FILTERED" | awk -F, -v WIDTH="$WIDTH" \
+        '{A[$5]+=1}
+        REGION_MAX = 0
+        {
+        if (WIDTH == 0)
+        {
+            WIDTH = 10000
+        }
+        }
+        END{
+        for (REGION_COUNT in A)
+        {
+            if (A[REGION_COUNT] > REGION_MAX)
+            {
+                REGION_MAX = A[REGION_COUNT]
+            }
+        }
+        for(REGION_COUNT in A)
+        {
+            if (REGION_COUNT == "")
+            {
+                NONE_COUNT+=A[REGION_COUNT]
+            }
+            else
+            {
+                printf("%s: ", REGION_COUNT)
+                HASH=sprintf("%"((A[REGION_COUNT]*WIDTH)/REGION_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+            }
+        }
+        if (NONE_COUNT > 0)
+        {
+            printf("None : ")
+            HASH=sprintf("%"((NONE_COUNT*WIDTH)/REGION_MAX)"s", ""); gsub(" ", "#", HASH); print HASH
+
+        }
+        }' | sort
+        exit 0
+		fi
+fi
